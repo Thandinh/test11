@@ -1,4 +1,4 @@
-# app.py
+# app.py 
 import os
 import time
 import shutil
@@ -166,44 +166,14 @@ def process_video(filepath: str):
     w = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Try different codecs in order of browser compatibility
-    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
-    writer = None
-    codec_used = None
+    # Strategy: Save frames as images first, then create browser-compatible video
+    frames_dir = out_dir / "frames"
+    frames_dir.mkdir(exist_ok=True)
     
-    # List of codecs to try (in order of preference)
-    codecs_to_try = [
-        ('mp4v', 'mp4v', '.mp4'),  # MPEG-4 Part 2 - widely supported
-        ('avc1', 'avc1', '.mp4'),  # H.264 - best quality
-        ('H264', 'H264', '.mp4'),  # H.264 alternative
-        ('XVID', 'XVID', '.avi'),  # Xvid codec fallback
-        ('MJPG', 'MJPG', '.avi'),  # Motion JPEG - always works
-    ]
-    
-    for codec_name, fourcc_str, ext in codecs_to_try:
-        try:
-            fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
-            test_path = out_dir / (Path(filepath).stem + f"_annotated{ext}")
-            test_writer = cv2.VideoWriter(str(test_path), fourcc, fps, (w, h))
-            
-            if test_writer.isOpened():
-                writer = test_writer
-                out_video_path = test_path
-                codec_used = codec_name
-                print(f"✓ Using codec: {codec_name} (extension: {ext})")
-                break
-            else:
-                test_writer.release()
-        except Exception as e:
-            print(f"✗ Codec {codec_name} failed: {e}")
-            continue
-    
-    if writer is None or not writer.isOpened():
-        raise RuntimeError("Cannot create video writer - no compatible codec found")
-
     # Đếm xe đúng cách: lấy số xe tối đa trong 1 frame thay vì cộng dồn
     max_counts = {}
     frame_count = 0
+    saved_frames = []
     
     # stream prediction with settings
     stream = model.predict(source=str(filepath), 
@@ -212,7 +182,7 @@ def process_video(filepath: str):
                           iou=DETECTION_SETTINGS["iou"],
                           max_det=DETECTION_SETTINGS["max_det"],
                           save=False)
-    frames_written = 0
+    
     for res in stream:
         # res.plot() => RGB
         try:
@@ -240,25 +210,102 @@ def process_video(filepath: str):
             if label not in max_counts or count > max_counts[label]:
                 max_counts[label] = count
 
-        # write frame
+        # Save frame as JPEG (browser can always display images)
         if img.ndim == 3 and img.shape[2] == 3:
             bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         else:
             bgr = img
-        writer.write(bgr)
-        frames_written += 1
+            
+        frame_filename = f"frame_{frame_count:06d}.jpg"
+        frame_path = frames_dir / frame_filename
+        cv2.imwrite(str(frame_path), bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        saved_frames.append(frame_filename)
         frame_count += 1
+        
+        # Limit frames to prevent too large videos (max 300 frames ~ 10 seconds at 30fps)
+        if frame_count >= 300:
+            break
 
-    writer.release()
     in_cap.release()
     
-    # Set file permissions for Ubuntu (readable by all)
+    print(f"✓ Saved {frame_count} frames as JPEGs")
+    
+    # Now try to create video using different methods
+    out_video_path = None
+    
+    # Method 1: Try FFmpeg if available (creates perfect browser-compatible MP4)
     try:
-        os.chmod(str(out_video_path), 0o644)
+        import subprocess
+        out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
+        
+        result = subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(int(fps)),
+            '-i', str(frames_dir / 'frame_%06d.jpg'),
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            str(out_video_path)
+        ], capture_output=True, timeout=120, text=True)
+        
+        if result.returncode == 0 and out_video_path.exists() and out_video_path.stat().st_size > 0:
+            print(f"✓ Created MP4 video using FFmpeg: {out_video_path.name}")
+            # Clean up frames after successful video creation
+            import shutil
+            shutil.rmtree(str(frames_dir))
+        else:
+            print(f"FFmpeg failed: {result.stderr}")
+            out_video_path = None
+    except Exception as e:
+        print(f"FFmpeg not available or failed: {e}")
+        out_video_path = None
+    
+    # Method 2: If FFmpeg failed, use OpenCV with mp4v codec
+    if out_video_path is None or not out_video_path.exists():
+        print("Trying OpenCV VideoWriter with mp4v codec...")
+        out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w, h))
+        
+        if writer.isOpened():
+            for frame_file in saved_frames:
+                frame_img = cv2.imread(str(frames_dir / frame_file))
+                if frame_img is not None:
+                    writer.write(frame_img)
+            writer.release()
+            print(f"✓ Created MP4 video using OpenCV mp4v: {out_video_path.name}")
+            # Clean up frames
+            import shutil
+            shutil.rmtree(str(frames_dir))
+        else:
+            # Method 3: Fallback - keep frames and create slideshow JSON
+            print("⚠ Video creation failed, keeping frames for slideshow")
+            out_video_path = frames_dir  # Return frames directory instead
+            
+            # Create metadata JSON for JavaScript slideshow
+            metadata = {
+                "type": "slideshow",
+                "fps": fps,
+                "frames": saved_frames,
+                "frame_count": frame_count,
+                "width": w,
+                "height": h
+            }
+            metadata_path = out_dir / "slideshow.json"
+            with open(str(metadata_path), 'w') as f:
+                json.dump(metadata, f)
+    
+    # Set file permissions for Ubuntu
+    try:
+        if out_video_path.is_file():
+            os.chmod(str(out_video_path), 0o644)
+        elif out_video_path.is_dir():
+            # Set permissions for all frames
+            for item in out_video_path.rglob('*'):
+                if item.is_file():
+                    os.chmod(str(item), 0o644)
     except Exception as e:
         print(f"Warning: Could not set file permissions: {e}")
     
-    print(f"✓ Video created successfully using {codec_used} codec: {out_video_path.name}")
+    print(f"✓ Video processing complete")
 
     # Sử dụng số xe tối đa thay vì tổng cộng dồn
     counts = max_counts
