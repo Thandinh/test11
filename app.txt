@@ -166,14 +166,15 @@ def process_video(filepath: str):
     w = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Create MP4 with XVID codec for maximum compatibility
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out_video_path = out_dir / (Path(filepath).stem + "_annotated.avi")
+    # Try MP4 with mp4v codec first (best browser compatibility)
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
     writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w, h))
     
     if not writer.isOpened():
-        # Fallback to MJPEG if XVID fails
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        # Fallback to AVI with XVID
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out_video_path = out_dir / (Path(filepath).stem + "_annotated.avi")
         writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w, h))
         
     if not writer.isOpened():
@@ -329,29 +330,45 @@ def phone_camera():
     """Simple page for phone to use as camera"""
     return render_template("phone_camera.html")
 
-# Serve result files with proper MIME types
+# Serve result files with proper MIME types and direct file streaming
 @app.route("/results/<path:filename>")
 def get_result_file(filename):
+    from flask import Response
     file_path = RESULT_FOLDER / filename
+    
     if not file_path.exists():
         return "File not found", 404
     
-    # Get MIME type
-    mime_type, _ = mimetypes.guess_type(str(file_path))
-    if mime_type is None:
-        # Fallback MIME types
-        ext = file_path.suffix.lower()
-        if ext in ['.avi', '.mp4', '.mov', '.mkv', '.webm']:
-            mime_type = 'video/x-msvideo' if ext == '.avi' else 'video/mp4'
-        else:
-            mime_type = 'application/octet-stream'
+    # Read file in binary mode
+    try:
+        with open(str(file_path), 'rb') as f:
+            file_data = f.read()
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return "Error reading file", 500
     
-    response = make_response(send_from_directory(str(RESULT_FOLDER), filename, as_attachment=False))
-    response.headers['Content-Type'] = mime_type
+    # Determine MIME type
+    ext = file_path.suffix.lower()
+    if ext == '.avi':
+        mime_type = 'video/x-msvideo'
+    elif ext == '.mp4':
+        mime_type = 'video/mp4'
+    elif ext in ['.jpg', '.jpeg']:
+        mime_type = 'image/jpeg'
+    elif ext == '.png':
+        mime_type = 'image/png'
+    else:
+        mime_type = 'application/octet-stream'
+    
+    # Create response with proper headers
+    response = Response(file_data, mimetype=mime_type)
+    response.headers['Content-Length'] = len(file_data)
     response.headers['Accept-Ranges'] = 'bytes'
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    
     return response
 
-# Also serve static files with proper MIME types
+# Also serve via static route
 @app.route("/static/results/<path:filename>")
 def serve_static_result(filename):
     return get_result_file(filename)
