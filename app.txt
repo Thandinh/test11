@@ -164,9 +164,9 @@ def process_video(filepath: str):
     fps = in_cap.get(cv2.CAP_PROP_FPS) or 25.0
     w = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # Use mp4v codec for better compatibility across platforms
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
+    # Use XVID codec for maximum browser compatibility
+    fourcc = cv2.VideoWriter_fourcc(*"XVID")
+    out_video_path = out_dir / (Path(filepath).stem + "_annotated.avi")
     writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w,h))
 
     # Đếm xe đúng cách: lấy số xe tối đa trong 1 frame thay vì cộng dồn
@@ -316,7 +316,11 @@ def phone_camera():
 # Serve result files (optional)
 @app.route("/results/<path:filename>")
 def get_result_file(filename):
-    return send_from_directory(str(RESULT_FOLDER), filename, as_attachment=False)
+    # Set proper MIME type for video files
+    mimetype = None
+    if filename.lower().endswith(('.mp4', '.avi')):
+        mimetype = 'video/mp4' if filename.lower().endswith('.mp4') else 'video/x-msvideo'
+    return send_from_directory(str(RESULT_FOLDER), filename, as_attachment=False, mimetype=mimetype)
 
 # ---------------- REST API ----------------
 @app.route("/api/detect", methods=["POST"])
