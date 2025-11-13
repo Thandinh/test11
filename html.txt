@@ -278,8 +278,8 @@
 
         {% if result_video %}
           <div class="result-media-large" id="uploadedVideoResult">
-            <video class="result-video" controls preload="metadata">
-              <source src="{{ url_for('static', filename=result_video) }}" type="{% if result_video.endswith('.avi') %}video/x-msvideo{% else %}video/mp4{% endif %}">
+            <video class="result-video" controls preload="metadata" style="max-width: 100%; height: auto;">
+              <source src="{{ url_for('static', filename=result_video) }}" type="video/x-msvideo">
               Your browser does not support the video tag.
             </video>
           </div>
