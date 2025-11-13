@@ -1,0 +1,714 @@
+# app.py
+import os
+import time
+import shutil
+import json
+from pathlib import Path
+from datetime import datetime
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory, send_file, flash, jsonify
+from ultralytics import YOLO
+import cv2
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import base64
+from io import BytesIO
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.drawing.image import Image as XLImage
+import pandas as pd
+
+# ---------------- Config ----------------
+BASE_DIR = Path(__file__).parent.resolve()
+UPLOAD_FOLDER = BASE_DIR / "static" / "uploads"
+RESULT_FOLDER = BASE_DIR / "static" / "results"
+MODEL_FOLDER = BASE_DIR / "models"
+MODEL_FILENAME = "fixed_vehicle_model.pt"   # <-- Đặt tên file model của bạn tại đây
+MODEL_PATH = MODEL_FOLDER / MODEL_FILENAME
+
+ALLOWED_IMAGE = {".jpg", ".jpeg", ".png", ".bmp"}
+ALLOWED_VIDEO = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+
+# Create dirs
+for p in (UPLOAD_FOLDER, RESULT_FOLDER, MODEL_FOLDER):
+    p.mkdir(parents=True, exist_ok=True)
+
+# Flask app
+app = Flask(__name__, template_folder="templates")
+app.secret_key = "change_this_to_something_secret"
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
+app.config["RESULT_FOLDER"] = str(RESULT_FOLDER)
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1GB
+
+# Global settings (can be modified via API)
+DETECTION_SETTINGS = {
+    "confidence": 0.25,
+    "iou": 0.45,
+    "max_det": 300,
+    "alert_threshold": 70  # Alert if density > 70%
+}
+
+# History storage
+DETECTION_HISTORY = []
+
+# ---------------- Load model ----------------
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(f"Model not found at {MODEL_PATH}. Put your .pt in models/ or change MODEL_FILENAME.")
+print("Loading model from:", MODEL_PATH)
+model = YOLO(str(MODEL_PATH))
+
+# ---------------- helpers ----------------
+def is_image(name):
+    return Path(name).suffix.lower() in ALLOWED_IMAGE
+
+def is_video(name):
+    return Path(name).suffix.lower() in ALLOWED_VIDEO
+
+def ensure_clean_results_subdir(prefix="run"):
+    t = int(time.time() * 1000)
+    out_dir = RESULT_FOLDER / f"{prefix}_{t}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+def save_chart(counts, out_path):
+    plt.figure(figsize=(6,3))
+    labels = list(counts.keys())
+    vals = list(counts.values())
+    if not labels:
+        labels = ["No objects"]
+        vals = [0]
+    bars = plt.bar(labels, vals)
+    plt.title("Vehicle counts")
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+def to_static_rel(path: Path):
+    """Given a Path inside static/, return relative path to use with url_for('static', filename=...)"""
+    # path must be under BASE_DIR/static
+    try:
+        rel = path.relative_to(BASE_DIR / "static")
+        return str(rel).replace("\\","/")
+    except Exception:
+        # fallback: return basename
+        return str(path.name)
+
+# ---------------- image processing ----------------
+def process_image(filepath: str):
+    out_dir = ensure_clean_results_subdir("image")
+    # Run model with settings
+    results = model(str(filepath), 
+                   conf=DETECTION_SETTINGS["confidence"],
+                   iou=DETECTION_SETTINGS["iou"],
+                   max_det=DETECTION_SETTINGS["max_det"],
+                   save=False)
+    res = results[0]
+    # produce annotated image (RGB)
+    try:
+        annotated = res.plot()
+    except Exception:
+        # fallback: read original
+        img_bgr = cv2.imread(str(filepath))
+        annotated = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+    # convert to BGR and save
+    if annotated.ndim == 3 and annotated.shape[2] == 3:
+        save_img = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+    else:
+        save_img = annotated
+
+    out_img_path = out_dir / Path(filepath).name
+    cv2.imwrite(str(out_img_path), save_img)
+
+    counts = {}
+    try:
+        if hasattr(res, "boxes") and res.boxes:
+            cls_ids = res.boxes.cls.cpu().numpy().astype(int)
+            for cid in cls_ids:
+                label = model.names[int(cid)]
+                counts[label] = counts.get(label, 0) + 1
+    except Exception:
+        pass
+
+    total = sum(counts.values())
+    density = round((total / 50) * 100, 2)
+
+    chart_path = out_dir / "chart.png"
+    save_chart(counts, str(chart_path))
+    
+    # Save to history
+    DETECTION_HISTORY.append({
+        "timestamp": datetime.now().isoformat(),
+        "type": "image",
+        "total": total,
+        "density": density,
+        "counts": counts
+    })
+
+    return counts, density, to_static_rel(out_img_path), to_static_rel(chart_path)
+
+# ---------------- video processing ----------------
+def process_video(filepath: str):
+    out_dir = ensure_clean_results_subdir("video")
+    in_cap = cv2.VideoCapture(str(filepath))
+    if not in_cap.isOpened():
+        raise RuntimeError("Cannot open input video.")
+
+    fps = in_cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # Use mp4v codec for better compatibility across platforms
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
+    writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w,h))
+
+    # Đếm xe đúng cách: lấy số xe tối đa trong 1 frame thay vì cộng dồn
+    max_counts = {}
+    frame_count = 0
+    
+    # stream prediction with settings
+    stream = model.predict(source=str(filepath), 
+                          stream=True, 
+                          conf=DETECTION_SETTINGS["confidence"],
+                          iou=DETECTION_SETTINGS["iou"],
+                          max_det=DETECTION_SETTINGS["max_det"],
+                          save=False)
+    frames_written = 0
+    for res in stream:
+        # res.plot() => RGB
+        try:
+            img = res.plot()
+        except Exception:
+            # fallback: read next frame
+            ret, frame = in_cap.read()
+            if not ret:
+                break
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Đếm xe trong frame hiện tại
+        current_frame_counts = {}
+        try:
+            if hasattr(res, "boxes") and res.boxes is not None and len(res.boxes) > 0:
+                cls_ids = res.boxes.cls.cpu().numpy().astype(int)
+                for cid in cls_ids:
+                    label = model.names[int(cid)]
+                    current_frame_counts[label] = current_frame_counts.get(label, 0) + 1
+        except Exception:
+            pass
+
+        # Cập nhật số xe tối đa cho mỗi loại
+        for label, count in current_frame_counts.items():
+            if label not in max_counts or count > max_counts[label]:
+                max_counts[label] = count
+
+        # write frame
+        if img.ndim == 3 and img.shape[2] == 3:
+            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        else:
+            bgr = img
+        writer.write(bgr)
+        frames_written += 1
+        frame_count += 1
+
+    writer.release()
+    in_cap.release()
+
+    # Sử dụng số xe tối đa thay vì tổng cộng dồn
+    counts = max_counts
+    total = sum(counts.values())
+    density = round((total / 50) * 100, 2)
+    chart_path = out_dir / "chart.png"
+    save_chart(counts, str(chart_path))
+    
+    # Save to history
+    DETECTION_HISTORY.append({
+        "timestamp": datetime.now().isoformat(),
+        "type": "video",
+        "total": total,
+        "density": density,
+        "counts": counts
+    })
+
+    return counts, density, to_static_rel(out_video_path), to_static_rel(chart_path)
+
+# ---------------- snapshot (camera) processing ----------------
+def process_image_bytes(image_bytes: bytes, ext=".jpg"):
+    # save temp
+    out_dir = ensure_clean_results_subdir("cam")
+    fname = f"cam_{int(time.time()*1000)}{ext}"
+    in_path = out_dir / ("in_"+fname)
+    with open(in_path, "wb") as f:
+        f.write(image_bytes)
+    # process like image
+    return process_image(str(in_path))
+
+# ---------------- Routes ----------------
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        if "file" not in request.files:
+            flash("No file part")
+            return redirect(request.url)
+        file = request.files["file"]
+        if file.filename == "":
+            flash("No selected file")
+            return redirect(request.url)
+
+        suffix = Path(file.filename).suffix.lower()
+        # ensure unique
+        save_path = UPLOAD_FOLDER / file.filename
+        i = 1
+        while save_path.exists():
+            save_path = UPLOAD_FOLDER / f"{Path(file.filename).stem}_{i}{suffix}"
+            i += 1
+        file.save(str(save_path))
+
+        try:
+            if is_image(str(save_path)):
+                counts, density, result_img, chart = process_image(str(save_path))
+                return render_template("index.html",
+                    result_img=result_img,
+                    result_video=None,
+                    counts=counts,
+                    density=density,
+                    chart=chart,
+                    filename=save_path.name,
+                    MODEL_FILENAME=MODEL_FILENAME)
+            elif is_video(str(save_path)):
+                counts, density, result_video, chart = process_video(str(save_path))
+                return render_template("index.html",
+                    result_img=None,
+                    result_video=result_video,
+                    counts=counts,
+                    density=density,
+                    chart=chart,
+                    filename=save_path.name,
+                    MODEL_FILENAME=MODEL_FILENAME)
+            else:
+                flash("File type not allowed.")
+                return redirect(request.url)
+        except Exception as e:
+            print("Processing error:", e)
+            flash(f"Processing error: {e}")
+            return redirect(request.url)
+
+    return render_template("index.html", 
+                         result_img=None, 
+                         result_video=None, 
+                         counts=None, 
+                         density=None, 
+                         chart=None,
+                         MODEL_FILENAME=MODEL_FILENAME)
+
+# Phone camera page
+@app.route("/phone-camera")
+def phone_camera():
+    """Simple page for phone to use as camera"""
+    return render_template("phone_camera.html")
+
+# Serve result files (optional)
+@app.route("/results/<path:filename>")
+def get_result_file(filename):
+    return send_from_directory(str(RESULT_FOLDER), filename, as_attachment=False)
+
+# ---------------- REST API ----------------
+@app.route("/api/detect", methods=["POST"])
+def api_detect():
+    """
+    Accept form file (image/video) under key 'file'.
+    Return JSON:
+    {
+      "status": "ok",
+      "type": "image"|"video",
+      "counts": {...},
+      "density": 12.34,
+      "result_path": "/static/results/....jpg" or "/static/results/....mp4",
+      "chart": "/static/results/.../chart.png"
+    }
+    """
+    if "file" not in request.files:
+        return jsonify({"status":"error","message":"No file part"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"status":"error","message":"No filename"}), 400
+
+    suffix = Path(file.filename).suffix.lower()
+    save_path = UPLOAD_FOLDER / file.filename
+    i = 1
+    while save_path.exists():
+        save_path = UPLOAD_FOLDER / f"{Path(file.filename).stem}_{i}{suffix}"
+        i += 1
+    file.save(str(save_path))
+
+    try:
+        if is_image(str(save_path)):
+            counts, density, result_img, chart = process_image(str(save_path))
+            return jsonify({
+                "status":"ok",
+                "type":"image",
+                "counts": counts,
+                "density": density,
+                "result_path": url_for('static', filename=result_img, _external=False),
+                "chart": url_for('static', filename=chart, _external=False)
+            })
+        elif is_video(str(save_path)):
+            counts, density, result_video, chart = process_video(str(save_path))
+            return jsonify({
+                "status":"ok",
+                "type":"video",
+                "counts": counts,
+                "density": density,
+                "result_path": url_for('static', filename=result_video, _external=False),
+                "chart": url_for('static', filename=chart, _external=False)
+            })
+        else:
+            return jsonify({"status":"error","message":"Unsupported file type"}), 400
+    except Exception as e:
+        print("API processing error:", e)
+        return jsonify({"status":"error","message":str(e)}), 500
+
+@app.route("/api/detect_frame", methods=["POST"])
+def api_detect_frame():
+    """
+    Accept JSON {image: base64_data} or form-data file 'file' (image).
+    Returns annotated image (as data url), counts, chart and density.
+    """
+    try:
+        if "file" in request.files:
+            file = request.files["file"]
+            data = file.read()
+            counts, density, result_img, chart = process_image_bytes(data, ext=Path(file.filename).suffix or ".jpg")
+        else:
+            data = request.json.get("image", None)
+            if not data:
+                return jsonify({"status":"error","message":"No image provided"}), 400
+            # data is data-url
+            header, b64 = data.split(",",1) if "," in data else (None, data)
+            b = base64.b64decode(b64)
+            counts, density, result_img, chart = process_image_bytes(b, ext=".jpg")
+        
+        # return annotated image encoded
+        annotated_path = BASE_DIR / "static" / result_img
+        with open(annotated_path, "rb") as f:
+            b = f.read()
+            annotated_url = "data:image/jpeg;base64," + base64.b64encode(b).decode("utf-8")
+        
+        # return chart encoded
+        chart_path = BASE_DIR / "static" / chart
+        with open(chart_path, "rb") as f:
+            b = f.read()
+            chart_url = "data:image/png;base64," + base64.b64encode(b).decode("utf-8")
+        
+        return jsonify({
+            "status":"ok",
+            "counts":counts,
+            "density":density,
+            "annotated":annotated_url,
+            "chart":chart_url,
+            "total":sum(counts.values()) if counts else 0
+        })
+    except Exception as e:
+        print("Frame API error:", e)
+        return jsonify({"status":"error","message":str(e)}), 500
+
+@app.route("/api/detect_realtime", methods=["POST", "GET"])
+def api_detect_realtime():
+    """
+    Real-time detection for camera stream - faster processing
+    Returns only detection results without saving files
+    """
+    # Test endpoint
+    if request.method == "GET":
+        return jsonify({"status":"ok", "message":"Realtime API is working"})
+    
+    try:
+        data = request.json.get("image", None)
+        if not data:
+            return jsonify({"status":"error","message":"No image provided"}), 400
+        
+        # Decode base64 image
+        header, b64 = data.split(",",1) if "," in data else (None, data)
+        img_data = base64.b64decode(b64)
+        
+        # Convert to numpy array
+        nparr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            return jsonify({"status":"error","message":"Failed to decode image"}), 400
+        
+        # Run detection with settings
+        results = model(img, 
+                       save=False, 
+                       conf=DETECTION_SETTINGS["confidence"],
+                       iou=DETECTION_SETTINGS["iou"],
+                       max_det=DETECTION_SETTINGS["max_det"],
+                       verbose=False)
+        res = results[0]
+        
+        # Get annotated image
+        try:
+            annotated = res.plot()
+            if annotated.ndim == 3 and annotated.shape[2] == 3:
+                annotated_bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+            else:
+                annotated_bgr = annotated
+        except Exception as e:
+            print(f"Annotation error: {e}")
+            annotated_bgr = img
+        
+        # Encode annotated image to base64
+        _, buffer = cv2.imencode('.jpg', annotated_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        annotated_b64 = base64.b64encode(buffer).decode('utf-8')
+        annotated_url = f"data:image/jpeg;base64,{annotated_b64}"
+        
+        # Count detections
+        counts = {}
+        if hasattr(res, "boxes") and res.boxes is not None and len(res.boxes) > 0:
+            cls_ids = res.boxes.cls.cpu().numpy().astype(int)
+            for cid in cls_ids:
+                label = model.names[int(cid)]
+                counts[label] = counts.get(label, 0) + 1
+        
+        total = sum(counts.values())
+        density = round((total / 50) * 100, 2)
+        
+        # Check alert threshold
+        alert = density > DETECTION_SETTINGS["alert_threshold"]
+        
+        return jsonify({
+            "status":"ok",
+            "counts":counts,
+            "density":density,
+            "annotated":annotated_url,
+            "total":total,
+            "alert":alert
+        })
+        
+    except Exception as e:
+        print("Realtime API error:", e)
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status":"error","message":str(e)}), 500
+
+# ---------------- Settings API ----------------
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    global DETECTION_SETTINGS
+    if request.method == "POST":
+        data = request.get_json()
+        if "confidence" in data:
+            DETECTION_SETTINGS["confidence"] = float(data["confidence"])
+        if "iou" in data:
+            DETECTION_SETTINGS["iou"] = float(data["iou"])
+        if "max_det" in data:
+            DETECTION_SETTINGS["max_det"] = int(data["max_det"])
+        if "alert_threshold" in data:
+            DETECTION_SETTINGS["alert_threshold"] = int(data["alert_threshold"])
+        return jsonify({"status": "ok", "settings": DETECTION_SETTINGS})
+    else:
+        return jsonify(DETECTION_SETTINGS)
+
+# ---------------- History API ----------------
+@app.route("/api/history", methods=["GET"])
+def api_history():
+    return jsonify(DETECTION_HISTORY[-100:])  # Return last 100 records
+
+@app.route("/api/history/clear", methods=["POST"])
+def api_history_clear():
+    global DETECTION_HISTORY
+    DETECTION_HISTORY = []
+    return jsonify({"status": "ok", "message": "History cleared"})
+
+# ---------------- Export PDF ----------------
+@app.route("/api/export/pdf", methods=["POST"])
+def export_pdf():
+    try:
+        data = request.get_json()
+        counts = data.get("counts", {})
+        density = data.get("density", 0)
+        total = data.get("total", 0)
+        image_path = data.get("image_path", "")
+        chart_path = data.get("chart_path", "")
+        source_type = data.get("source_type", "image")
+        
+        # Create PDF
+        pdf_filename = f"report_{int(time.time())}.pdf"
+        pdf_path = RESULT_FOLDER / pdf_filename
+        
+        doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#4f46e5'),
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        story.append(Paragraph("Traffic Analysis Report", title_style))
+        story.append(Spacer(1, 12))
+        
+        # Metadata
+        meta_data = [
+            ["Report Generated:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+            ["Source Type:", source_type.capitalize()],
+            ["Total Vehicles:", str(total)],
+            ["Traffic Density:", f"{density}%"],
+        ]
+        
+        meta_table = Table(meta_data, colWidths=[2*inch, 4*inch])
+        meta_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb'))
+        ]))
+        story.append(meta_table)
+        story.append(Spacer(1, 20))
+        
+        # Vehicle Counts Table
+        if counts:
+            story.append(Paragraph("Vehicle Detection Summary", styles['Heading2']))
+            story.append(Spacer(1, 12))
+            
+            count_data = [["Vehicle Type", "Count"]]
+            for vehicle, count in counts.items():
+                count_data.append([vehicle, str(count)])
+            
+            count_table = Table(count_data, colWidths=[3*inch, 2*inch])
+            count_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            story.append(count_table)
+            story.append(Spacer(1, 20))
+        
+        # Add chart image if available
+        if chart_path:
+            full_chart_path = BASE_DIR / "static" / chart_path
+            if full_chart_path.exists():
+                story.append(Paragraph("Detection Chart", styles['Heading2']))
+                story.append(Spacer(1, 12))
+                img = RLImage(str(full_chart_path), width=5*inch, height=2.5*inch)
+                story.append(img)
+                story.append(Spacer(1, 20))
+        
+        # Add annotated image if available
+        if image_path:
+            full_image_path = BASE_DIR / "static" / image_path
+            if full_image_path.exists():
+                story.append(Paragraph("Annotated Result", styles['Heading2']))
+                story.append(Spacer(1, 12))
+                img = RLImage(str(full_image_path), width=6*inch, height=4*inch)
+                story.append(img)
+        
+        doc.build(story)
+        
+        return send_file(str(pdf_path), as_attachment=True, download_name=pdf_filename)
+        
+    except Exception as e:
+        print(f"PDF Export error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ---------------- Export Excel ----------------
+@app.route("/api/export/excel", methods=["POST"])
+def export_excel():
+    try:
+        data = request.get_json()
+        counts = data.get("counts", {})
+        density = data.get("density", 0)
+        total = data.get("total", 0)
+        source_type = data.get("source_type", "image")
+        
+        # Create Excel
+        excel_filename = f"report_{int(time.time())}.xlsx"
+        excel_path = RESULT_FOLDER / excel_filename
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Traffic Analysis"
+        
+        # Header styling
+        header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True, size=14)
+        
+        # Title
+        ws['A1'] = "Traffic Analysis Report"
+        ws['A1'].font = Font(bold=True, size=18, color="4F46E5")
+        ws.merge_cells('A1:C1')
+        ws['A1'].alignment = Alignment(horizontal='center')
+        
+        # Metadata
+        ws['A3'] = "Report Generated:"
+        ws['B3'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ws['A4'] = "Source Type:"
+        ws['B4'] = source_type.capitalize()
+        ws['A5'] = "Total Vehicles:"
+        ws['B5'] = total
+        ws['A6'] = "Traffic Density:"
+        ws['B6'] = f"{density}%"
+        
+        for row in range(3, 7):
+            ws[f'A{row}'].font = Font(bold=True)
+        
+        # Vehicle counts table
+        ws['A8'] = "Vehicle Type"
+        ws['B8'] = "Count"
+        ws['A8'].fill = header_fill
+        ws['B8'].fill = header_fill
+        ws['A8'].font = header_font
+        ws['B8'].font = header_font
+        
+        row_num = 9
+        for vehicle, count in counts.items():
+            ws[f'A{row_num}'] = vehicle
+            ws[f'B{row_num}'] = count
+            row_num += 1
+        
+        # Total row
+        ws[f'A{row_num}'] = "TOTAL"
+        ws[f'B{row_num}'] = total
+        ws[f'A{row_num}'].font = Font(bold=True)
+        ws[f'B{row_num}'].font = Font(bold=True)
+        
+        # Column widths
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 15
+        
+        # Save
+        wb.save(str(excel_path))
+        
+        return send_file(str(excel_path), as_attachment=True, download_name=excel_filename)
+        
+    except Exception as e:
+        print(f"Excel Export error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ---------------- run ----------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True, threaded=True)

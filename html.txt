@@ -1,0 +1,931 @@
+<!-- templates/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>🚗 AI Traffic Analysis System</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+<div class="container-fluid">
+  <!-- Modern Header -->
+  <header class="main-header">
+    <div class="container-xl">
+      <div class="row align-items-center">
+        <div class="col-md-6">
+          <h1 class="header-title">
+            <i class="fas fa-traffic-light"></i> AI Traffic Analysis
+          </h1>
+          <p class="header-subtitle">Real-time Vehicle Detection & Traffic Monitoring</p>
+        </div>
+        <div class="col-md-6 text-md-end">
+          <div class="header-stats">
+            <div class="stat-item">
+              <i class="fas fa-camera"></i>
+              <span>Real-time Detection</span>
+            </div>
+            <div class="stat-item">
+              <i class="fas fa-chart-line"></i>
+              <span>Advanced Analytics</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container-xl py-4">
+    <div class="row g-4">
+      <!-- Left Column: Controls & Tools -->
+      <div class="col-xl-4 col-lg-5">
+        <div class="control-panel">
+          
+          <!-- Upload Section -->
+          <div class="section-card">
+            <div class="section-header">
+              <i class="fas fa-cloud-upload-alt"></i>
+              <h3>Upload File</h3>
+            </div>
+            <div class="section-body">
+              <form method="post" enctype="multipart/form-data" id="uploadForm">
+                <div class="upload-zone" id="uploadZone">
+                  <div class="upload-icon">
+                    <i class="fas fa-file-image"></i>
+                  </div>
+                  <h4>Drop file here or click to browse</h4>
+                  <p>Support: JPG, PNG, MP4, AVI</p>
+                  <input type="file" id="file" name="file" accept="image/*,video/*" required hidden>
+                </div>
+                <button class="btn btn-primary btn-lg w-100 mt-3" type="submit">
+                  <i class="fas fa-play"></i> Start Detection
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <!-- Tools Tabs -->
+          <div class="section-card mt-3">
+            <ul class="nav nav-pills nav-fill" id="toolsTabs" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="camera-tab" data-bs-toggle="tab" data-bs-target="#camera" type="button" role="tab">
+                  <i class="fas fa-video"></i><br><small>Camera</small>
+                </button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button" role="tab">
+                  <i class="fas fa-cog"></i><br><small>Settings</small>
+                </button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button" role="tab">
+                  <i class="fas fa-history"></i><br><small>History</small>
+                </button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="api-tab" data-bs-toggle="tab" data-bs-target="#api" type="button" role="tab">
+                  <i class="fas fa-code"></i><br><small>API</small>
+                </button>
+              </li>
+            </ul>
+
+            <div class="tab-content p-3">
+              <!-- Camera Tab -->
+              <div class="tab-pane fade show active" id="camera" role="tabpanel">
+                <div class="camera-mode-selector mb-3">
+                  <input type="radio" class="btn-check" name="camMode" id="modeSnapshot" checked>
+                  <label class="btn btn-outline-primary" for="modeSnapshot">
+                    <i class="fas fa-camera"></i> Snapshot
+                  </label>
+                  
+                  <input type="radio" class="btn-check" name="camMode" id="modeRealtime">
+                  <label class="btn btn-outline-primary" for="modeRealtime">
+                    <i class="fas fa-video"></i> Real-time
+                  </label>
+                </div>
+                
+                <div id="cameraPreview" class="camera-preview" style="display:none;">
+                  <video id="camVideo" autoplay playsinline></video>
+                  <canvas id="camCanvas" style="display:none;"></canvas>
+                </div>
+                
+                <div class="d-grid gap-2">
+                  <button id="openCam" class="btn btn-primary">
+                    <i class="fas fa-power-off"></i> Start Camera
+                  </button>
+                  <button id="snapshot" class="btn btn-success" disabled style="display:none;">
+                    <i class="fas fa-camera"></i> Capture Snapshot
+                  </button>
+                  <button id="startRealtime" class="btn btn-success" disabled style="display:none;">
+                    <i class="fas fa-play-circle"></i> Start Detection
+                  </button>
+                  <button id="stopRealtime" class="btn btn-warning" disabled style="display:none;">
+                    <i class="fas fa-pause-circle"></i> Pause Detection
+                  </button>
+                  <button id="closeCam" class="btn btn-danger" style="display:none;">
+                    <i class="fas fa-times-circle"></i> Stop Camera
+                  </button>
+                </div>
+                
+                <div id="realtimeStats" class="realtime-stats-panel mt-3" style="display:none;">
+                  <div class="stats-grid">
+                    <div class="stat-box">
+                      <div class="stat-label">FPS</div>
+                      <div id="fpsCounter" class="stat-value">0</div>
+                    </div>
+                    <div class="stat-box">
+                      <div class="stat-label">Vehicles</div>
+                      <div id="vehicleCount" class="stat-value text-primary">0</div>
+                    </div>
+                    <div class="stat-box">
+                      <div class="stat-label">Density</div>
+                      <div id="densityValue" class="stat-value text-warning">0%</div>
+                    </div>
+                  </div>
+                  <div id="vehicleBreakdown" class="vehicle-breakdown mt-2"></div>
+                </div>
+              </div>
+
+              <!-- Settings Tab -->
+              <div class="tab-pane fade" id="settings" role="tabpanel">
+                <h6 class="mb-3"><i class="fas fa-sliders-h"></i> Detection Settings</h6>
+                <div class="settings-panel">
+                  <div class="settings-row">
+                    <label>Confidence Threshold:</label>
+                    <input type="range" id="confRange" min="0.1" max="0.9" step="0.05" value="0.25">
+                    <span class="value-display" id="confValue">0.25</span>
+                  </div>
+                  <div class="settings-row">
+                    <label>IOU Threshold:</label>
+                    <input type="range" id="iouRange" min="0.1" max="0.9" step="0.05" value="0.45">
+                    <span class="value-display" id="iouValue">0.45</span>
+                  </div>
+                  <div class="settings-row">
+                    <label>Max Detections:</label>
+                    <input type="range" id="maxDetRange" min="50" max="500" step="50" value="300">
+                    <span class="value-display" id="maxDetValue">300</span>
+                  </div>
+                  <div class="settings-row">
+                    <label>Alert Threshold (%):</label>
+                    <input type="range" id="alertRange" min="10" max="100" step="5" value="70">
+                    <span class="value-display" id="alertValue">70</span>
+                  </div>
+                  <button id="saveSettings" class="btn btn-primary w-100 mt-2">
+                    <i class="fas fa-save"></i> Save Settings
+                  </button>
+                  <div id="settingsStatus" class="mt-2"></div>
+                </div>
+                <div class="alert alert-info mt-3 small">
+                  <i class="fas fa-info-circle"></i> These settings apply to all detection operations (image, video, camera).
+                </div>
+              </div>
+
+              <!-- History Tab -->
+              <div class="tab-pane fade" id="history" role="tabpanel">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6><i class="fas fa-chart-line"></i> Detection History</h6>
+                  <button id="clearHistory" class="btn btn-sm btn-outline-danger">
+                    <i class="fas fa-trash"></i> Clear
+                  </button>
+                </div>
+                <div id="historyContent">
+                  <p class="text-muted text-center">No history yet. Perform some detections first.</p>
+                </div>
+                <div id="historyChart" class="mt-3" style="display:none;">
+                  <canvas id="historyCanvas" width="100%" height="60"></canvas>
+                </div>
+              </div>
+
+              <!-- API Tab -->
+              <div class="tab-pane fade" id="api" role="tabpanel">
+                <h6 class="mb-3"><i class="fas fa-code"></i> API Documentation</h6>
+                <p class="small text-muted">POST to <code>/api/detect</code> (file) or <code>/api/detect_frame</code> (base64) — returns JSON with result_path & chart.</p>
+                <pre class="small bg-light p-2 rounded">curl -F "file=@your.jpg" http://localhost:5000/api/detect</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- System Info -->
+          <div class="section-card mt-3">
+            <div class="section-header">
+              <i class="fas fa-info-circle"></i>
+              <h3>System Info</h3>
+            </div>
+            <div class="section-body">
+              <ul class="list-unstyled mb-0 small">
+                <li class="mb-2">
+                  <i class="fas fa-brain text-primary"></i> 
+                  <strong>Model:</strong> <code>{{ MODEL_FILENAME }}</code>
+                </li>
+                <li class="mb-2">
+                  <i class="fas fa-folder text-warning"></i> 
+                  <strong>Results:</strong> <code>static/results/</code>
+                </li>
+                <li>
+                  <i class="fas fa-microchip text-success"></i> 
+                  <strong>GPU:</strong> <span id="gpuStatus" class="badge bg-secondary">Checking...</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Results Display -->
+      <div class="col-xl-8 col-lg-7">
+        <div class="results-panel">
+          
+          <!-- Results Header -->
+          <div class="results-header">
+            <h3><i class="fas fa-chart-line"></i> <span id="resultTitle">Detection Results</span></h3>
+            <div class="results-actions">
+              <button class="btn btn-sm btn-outline-primary" id="exportPDFBtn" style="display:none;">
+                <i class="fas fa-file-pdf"></i> PDF
+              </button>
+              <button class="btn btn-sm btn-outline-primary" id="exportExcelBtn" style="display:none;">
+                <i class="fas fa-file-excel"></i> Excel
+              </button>
+            </div>
+          </div>
+
+          {% with messages = get_flashed_messages() %}
+            {% if messages %}
+              <div class="alert alert-warning">
+                <i class="fas fa-info-circle"></i> {{ messages[0] }}
+              </div>
+            {% endif %}
+          {% endwith %}
+
+          <!-- Alert Banner -->
+          <div id="alertBanner" class="alert alert-danger" style="display:none;">
+            <i class="fas fa-exclamation-triangle"></i> <strong>High Traffic Alert!</strong> 
+            Traffic density exceeds threshold.
+            <audio id="alertSound" src="" preload="auto"></audio>
+          </div>
+
+          <!-- Real-time Canvas -->
+          <div id="realtimeVideoContainer" class="result-media-container" style="display:none;">
+            <canvas id="outputCanvas" width="640" height="480"></canvas>
+          </div>
+
+          {% if result_img %}
+            <div class="result-media-large" id="uploadedImageResult">
+              <img src="{{ url_for('static', filename=result_img) }}" alt="Detection Result">
+            </div>
+          {% endif %}
+
+        {% if result_video %}
+          <div class="result-media-large" id="uploadedVideoResult">
+            <video class="result-video" controls preload="metadata" muted>
+              <source src="{{ url_for('static', filename=result_video) }}" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+          </div>
+        {% endif %}
+
+        <div id="cameraResultContainer" style="display:none;"></div>
+
+        {% if counts %}
+          <!-- Stats Cards -->
+          <div class="stats-section">
+            <div class="stats-row">
+              {% for k,v in counts.items() %}
+                <div class="stat-card">
+                  <h4>{{ v }}</h4>
+                  <p>{{ k }}</p>
+                </div>
+              {% endfor %}
+              <div class="stat-card" style="background: var(--gradient-success);">
+                <h4>{{ counts.values()|sum }}</h4>
+                <p>Total Vehicles</p>
+              </div>
+              {% if density %}
+                <div class="stat-card" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+                  <h4>{{ density }}%</h4>
+                  <p>Traffic Density</p>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+
+          <!-- Chart & Table -->
+          <div class="row g-4 px-4 pb-4">
+            <div class="col-md-6">
+              {% if chart %}
+                <div class="chart-container">
+                  <img src="{{ url_for('static', filename=chart) }}" alt="Chart" style="width: 100%; border-radius: var(--radius-md); box-shadow: var(--shadow-md);">
+                </div>
+              {% endif %}
+            </div>
+            <div class="col-md-6">
+              <table class="counts-table">
+                <thead>
+                  <tr>
+                    <th><i class="fas fa-car"></i> Type</th>
+                    <th><i class="fas fa-hashtag"></i> Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for k,v in counts.items() %}
+                    <tr>
+                      <td>{{ k }}</td>
+                      <td><strong>{{ v }}</strong></td>
+                    </tr>
+                  {% endfor %}
+                  <tr style="background: var(--bg-light); font-weight: 700;">
+                    <td><i class="fas fa-calculator"></i> Total</td>
+                    <td style="color: var(--primary); font-size: 1.1rem;">{{ counts.values()|sum }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="d-flex gap-2 px-4 pb-4">
+            <button class="btn btn-danger" id="exportPDFBtn2">
+              <i class="fas fa-file-pdf"></i> Export PDF
+            </button>
+            <button class="btn btn-success" id="exportExcelBtn2">
+              <i class="fas fa-file-excel"></i> Export Excel
+            </button>
+          </div>
+        {% else %}
+          <div class="text-center p-4 text-muted" id="noResultMessage">
+            <i class="fas fa-inbox fa-3x mb-3" style="opacity:0.3;"></i>
+            <p>No result yet. Upload an image or short video and run detection.</p>
+          </div>
+        {% endif %}
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+  <footer class="mt-4 text-center small text-muted fade-in">
+    <i class="fas fa-heart text-danger"></i> AI Traffic Analysis System © 2025 | 
+    Powered by YOLO & Flask
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  // Global variables
+  let currentResultData = {
+    image_path: '{{ result_img or result_video }}',
+    chart_path: '{{ chart }}',
+    counts: {{ counts|tojson|safe }},
+    density: {{ density if density else 0 }},
+    total: {{ total if total else 0 }},
+    source_type: '{{ 'video' if result_video else 'image' }}'
+  };
+  
+  const openCamBtn = document.getElementById("openCam");
+  const closeCamBtn = document.getElementById("closeCam");
+  const snapshotBtn = document.getElementById("snapshot");
+  const startRealtimeBtn = document.getElementById("startRealtime");
+  const stopRealtimeBtn = document.getElementById("stopRealtime");
+  const camVideo = document.getElementById("camVideo");
+  const camCanvas = document.getElementById("camCanvas");
+  const outputCanvas = document.getElementById("outputCanvas");
+  const cameraPreview = document.getElementById("cameraPreview");
+  const realtimeStats = document.getElementById("realtimeStats");
+  const modeSnapshot = document.getElementById("modeSnapshot");
+  const modeRealtime = document.getElementById("modeRealtime");
+  const resultTitle = document.getElementById("resultTitle");
+  const alertBanner = document.getElementById("alertBanner");
+  
+  // Result containers
+  const realtimeVideoContainer = document.getElementById("realtimeVideoContainer");
+  const cameraResultContainer = document.getElementById("cameraResultContainer");
+  const cameraStatsContainer = document.getElementById("cameraStatsContainer");
+  const noResultMessage = document.getElementById("noResultMessage");
+  const uploadedImageResult = document.getElementById("uploadedImageResult");
+  const uploadedVideoResult = document.getElementById("uploadedVideoResult");
+  const uploadedResultStats = document.getElementById("uploadedResultStats");
+  
+  let stream = null;
+  let realtimeInterval = null;
+  let isProcessing = false;
+  let frameCount = 0;
+  let lastTime = Date.now();
+  let currentMode = 'snapshot';
+
+  // Hide uploaded results when using camera
+  function hideUploadedResults() {
+    if (noResultMessage) noResultMessage.style.display = 'none';
+    if (uploadedImageResult) uploadedImageResult.style.display = 'none';
+    if (uploadedVideoResult) uploadedVideoResult.style.display = 'none';
+    if (uploadedResultStats) uploadedResultStats.style.display = 'none';
+  }
+
+  // Mode switching
+  modeSnapshot.addEventListener('change', () => {
+    currentMode = 'snapshot';
+    updateButtonsVisibility();
+  });
+  
+  modeRealtime.addEventListener('change', () => {
+    currentMode = 'realtime';
+    updateButtonsVisibility();
+  });
+
+  function updateButtonsVisibility() {
+    if (stream) {
+      if (currentMode === 'snapshot') {
+        snapshotBtn.style.display = 'block';
+        snapshotBtn.disabled = false;
+        startRealtimeBtn.style.display = 'none';
+        stopRealtimeBtn.style.display = 'none';
+        realtimeStats.style.display = 'none';
+        realtimeVideoContainer.style.display = 'none';
+        if (realtimeInterval) {
+          clearInterval(realtimeInterval);
+          realtimeInterval = null;
+        }
+      } else {
+        snapshotBtn.style.display = 'none';
+        startRealtimeBtn.style.display = 'block';
+        startRealtimeBtn.disabled = false;
+        stopRealtimeBtn.style.display = 'none';
+        realtimeStats.style.display = 'block';
+      }
+    }
+  }
+
+  openCamBtn.onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: 640, height: 480 }, 
+        audio: false 
+      });
+      camVideo.srcObject = stream;
+      cameraPreview.style.display = 'block';
+      closeCamBtn.style.display = 'inline-block';
+      openCamBtn.style.display = 'none';
+      
+      if (currentMode === 'snapshot') {
+        snapshotBtn.disabled = false;
+        snapshotBtn.style.display = 'block';
+        realtimeStats.style.display = 'none';
+      } else {
+        realtimeStats.style.display = 'block';
+        startRealtimeBtn.disabled = false;
+        startRealtimeBtn.style.display = 'block';
+      }
+    } catch (e) {
+      alert("Cannot open camera: " + e);
+    }
+  };
+
+  closeCamBtn.onclick = () => {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    if (realtimeInterval) {
+      clearInterval(realtimeInterval);
+      realtimeInterval = null;
+    }
+    cameraPreview.style.display = 'none';
+    realtimeStats.style.display = 'none';
+    realtimeVideoContainer.style.display = 'none';
+    cameraResultContainer.style.display = 'none';
+    cameraStatsContainer.style.display = 'none';
+    snapshotBtn.disabled = true;
+    snapshotBtn.style.display = 'none';
+    startRealtimeBtn.style.display = 'none';
+    stopRealtimeBtn.style.display = 'none';
+    closeCamBtn.style.display = 'none';
+    openCamBtn.style.display = 'block';
+    resultTitle.textContent = 'Result';
+  };
+
+  // Snapshot mode
+  snapshotBtn.onclick = async () => {
+    camCanvas.width = camVideo.videoWidth || 640;
+    camCanvas.height = camVideo.videoHeight || 480;
+    camCanvas.getContext("2d").drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
+    const dataUrl = camCanvas.toDataURL("image/jpeg", 0.8);
+    
+    hideUploadedResults();
+    resultTitle.textContent = 'Camera Snapshot Result';
+    cameraResultContainer.innerHTML = "<div class='text-center'><div class='spinner-border spinner-border-sm' role='status'><span class='visually-hidden'>Loading...</span></div> Processing...</div>";
+    cameraResultContainer.style.display = 'block';
+    
+    try {
+      const res = await fetch("/api/detect_frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: dataUrl })
+      });
+      const j = await res.json();
+      
+      if (j.status === "ok") {
+        let countsHtml = '';
+        let total = 0;
+        
+        if (j.counts && Object.keys(j.counts).length > 0) {
+          countsHtml = '<table class="table table-sm table-bordered mt-2"><thead><tr><th>Vehicle</th><th>Count</th></tr></thead><tbody>';
+          for (const [vehicle, count] of Object.entries(j.counts)) {
+            countsHtml += `<tr><td>${vehicle}</td><td>${count}</td></tr>`;
+            total += count;
+          }
+          countsHtml += `<tr class="table-info"><td><strong>Total</strong></td><td><strong>${total}</strong></td></tr></tbody></table>`;
+        } else {
+          countsHtml = '<p class="text-muted small mt-2">No vehicles detected</p>';
+        }
+        
+        cameraResultContainer.innerHTML = `
+          <div class="mb-3">
+            <img src="${j.annotated}" class="result-media" alt="snapshot result"/>
+          </div>
+        `;
+        
+        cameraStatsContainer.innerHTML = `
+          <div class="row">
+            <div class="col-md-6">
+              ${countsHtml}
+            </div>
+            <div class="col-md-6 text-center">
+              <img src="${j.chart}" class="img-fluid" alt="chart" style="max-height:200px;"/>
+              <p class="mt-2"><strong>Density:</strong> ${j.density}%</p>
+            </div>
+          </div>
+        `;
+        cameraStatsContainer.style.display = 'block';
+      } else {
+        cameraResultContainer.innerHTML = "<div class='alert alert-danger small mt-2'>Error: "+ j.message +"</div>";
+      }
+    } catch (e) {
+      cameraResultContainer.innerHTML = "<div class='alert alert-danger small mt-2'>Error: "+ e +"</div>";
+    }
+  };
+
+  // Real-time mode
+  startRealtimeBtn.onclick = () => {
+    console.log("Starting real-time detection...");
+    startRealtimeBtn.disabled = true;
+    startRealtimeBtn.style.display = 'none';
+    stopRealtimeBtn.disabled = false;
+    stopRealtimeBtn.style.display = 'block';
+    frameCount = 0;
+    lastTime = Date.now();
+    
+    hideUploadedResults();
+    resultTitle.textContent = 'Real-time Detection';
+    realtimeVideoContainer.style.display = 'block';
+    cameraStatsContainer.style.display = 'none';
+    cameraResultContainer.style.display = 'none';
+    
+    // Show initial video frame on canvas
+    const outCtx = outputCanvas.getContext("2d");
+    outputCanvas.width = 640;
+    outputCanvas.height = 480;
+    outCtx.fillStyle = '#000';
+    outCtx.fillRect(0, 0, 640, 480);
+    
+    // Process frames at ~5 FPS to avoid overloading
+    realtimeInterval = setInterval(processRealtimeFrame, 200);
+    console.log("Real-time detection started");
+  };
+
+  stopRealtimeBtn.onclick = () => {
+    if (realtimeInterval) {
+      clearInterval(realtimeInterval);
+      realtimeInterval = null;
+    }
+    stopRealtimeBtn.disabled = true;
+    stopRealtimeBtn.style.display = 'none';
+    startRealtimeBtn.disabled = false;
+    startRealtimeBtn.style.display = 'block';
+    isProcessing = false;
+    resultTitle.textContent = 'Real-time Detection (Stopped)';
+  };
+
+  async function processRealtimeFrame() {
+    if (isProcessing || !stream) {
+      console.log("Skipping frame - processing:", isProcessing, "stream:", !!stream);
+      return;
+    }
+    
+    isProcessing = true;
+    
+    try {
+      // Capture frame
+      camCanvas.width = camVideo.videoWidth || 640;
+      camCanvas.height = camVideo.videoHeight || 480;
+      const ctx = camCanvas.getContext("2d");
+      ctx.drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
+      const dataUrl = camCanvas.toDataURL("image/jpeg", 0.7);
+      
+      // Send to server
+      const res = await fetch("/api/detect_realtime", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: dataUrl })
+      });
+      
+      const j = await res.json();
+      console.log("Server response:", j.status, "Total vehicles:", j.total);
+      
+      if (j.status === "ok") {
+        // Display annotated frame
+        const img = new Image();
+        img.onload = () => {
+          const outCtx = outputCanvas.getContext("2d");
+          outputCanvas.width = camCanvas.width;
+          outputCanvas.height = camCanvas.height;
+          outCtx.drawImage(img, 0, 0);
+        };
+        img.onerror = () => {
+          console.error("Failed to load annotated image");
+        };
+        img.src = j.annotated;
+        
+        // Update stats
+        frameCount++;
+        const now = Date.now();
+        const elapsed = (now - lastTime) / 1000;
+        if (elapsed >= 1) {
+          const fps = frameCount / elapsed;
+          document.getElementById("fpsCounter").textContent = fps.toFixed(1);
+          frameCount = 0;
+          lastTime = now;
+        }
+        
+        document.getElementById("vehicleCount").textContent = j.total || 0;
+        document.getElementById("densityValue").textContent = (j.density || 0) + '%';
+        
+        // Check for alert
+        if (j.alert) {
+          showAlert();
+        }
+        
+        // Update breakdown
+        if (j.counts && Object.keys(j.counts).length > 0) {
+          let breakdown = '';
+          for (const [vehicle, count] of Object.entries(j.counts)) {
+            breakdown += `<span class="badge bg-secondary me-1">${vehicle}: ${count}</span>`;
+          }
+          document.getElementById("vehicleBreakdown").innerHTML = breakdown;
+        } else {
+          document.getElementById("vehicleBreakdown").innerHTML = '<span class="text-muted">No vehicles</span>';
+        }
+      } else {
+        console.error("Server error:", j.message);
+      }
+    } catch (e) {
+      console.error("Real-time detection error:", e);
+    } finally {
+      isProcessing = false;
+    }
+  }
+  
+  // ================== Settings Management ==================
+  const confRange = document.getElementById("confRange");
+  const iouRange = document.getElementById("iouRange");
+  const maxDetRange = document.getElementById("maxDetRange");
+  const alertRange = document.getElementById("alertRange");
+  const confValue = document.getElementById("confValue");
+  const iouValue = document.getElementById("iouValue");
+  const maxDetValue = document.getElementById("maxDetValue");
+  const alertValue = document.getElementById("alertValue");
+  const saveSettings = document.getElementById("saveSettings");
+  const settingsStatus = document.getElementById("settingsStatus");
+  
+  // Update value displays
+  confRange?.addEventListener('input', () => confValue.textContent = confRange.value);
+  iouRange?.addEventListener('input', () => iouValue.textContent = iouRange.value);
+  maxDetRange?.addEventListener('input', () => maxDetValue.textContent = maxDetRange.value);
+  alertRange?.addEventListener('input', () => alertValue.textContent = alertRange.value);
+  
+  // Load current settings on page load
+  async function loadSettings() {
+    try {
+      const res = await fetch("/api/settings");
+      const settings = await res.json();
+      if (confRange) confRange.value = settings.confidence;
+      if (iouRange) iouRange.value = settings.iou;
+      if (maxDetRange) maxDetRange.value = settings.max_det;
+      if (alertRange) alertRange.value = settings.alert_threshold;
+      if (confValue) confValue.textContent = settings.confidence;
+      if (iouValue) iouValue.textContent = settings.iou;
+      if (maxDetValue) maxDetValue.textContent = settings.max_det;
+      if (alertValue) alertValue.textContent = settings.alert_threshold;
+    } catch (e) {
+      console.error("Failed to load settings:", e);
+    }
+  }
+  
+  // Save settings
+  saveSettings?.addEventListener('click', async () => {
+    const settings = {
+      confidence: parseFloat(confRange.value),
+      iou: parseFloat(iouRange.value),
+      max_det: parseInt(maxDetRange.value),
+      alert_threshold: parseInt(alertRange.value)
+    };
+    
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(settings)
+      });
+      const result = await res.json();
+      
+      if (result.status === "ok") {
+        settingsStatus.innerHTML = '<div class="alert alert-success small">✓ Settings saved successfully!</div>';
+        setTimeout(() => settingsStatus.innerHTML = '', 3000);
+      }
+    } catch (e) {
+      settingsStatus.innerHTML = '<div class="alert alert-danger small">✗ Failed to save settings</div>';
+    }
+  });
+  
+  // ================== History Management ==================
+  const clearHistory = document.getElementById("clearHistory");
+  const historyContent = document.getElementById("historyContent");
+  
+  async function loadHistory() {
+    try {
+      const res = await fetch("/api/history");
+      const history = await res.json();
+      
+      if (history.length === 0) {
+        historyContent.innerHTML = '<p class="text-muted text-center">No history yet.</p>';
+        return;
+      }
+      
+      let html = '<div class="table-responsive"><table class="table table-sm table-hover"><thead><tr><th>Time</th><th>Type</th><th>Vehicles</th><th>Density</th></tr></thead><tbody>';
+      
+      history.reverse().forEach(item => {
+        const time = new Date(item.timestamp).toLocaleString();
+        html += `<tr>
+          <td class="small">${time}</td>
+          <td><span class="badge bg-info">${item.type}</span></td>
+          <td><strong>${item.total}</strong></td>
+          <td><span class="badge ${item.density > 70 ? 'bg-danger' : 'bg-success'}">${item.density}%</span></td>
+        </tr>`;
+      });
+      
+      html += '</tbody></table></div>';
+      historyContent.innerHTML = html;
+    } catch (e) {
+      console.error("Failed to load history:", e);
+    }
+  }
+  
+  clearHistory?.addEventListener('click', async () => {
+    if (confirm("Clear all history?")) {
+      try {
+        await fetch("/api/history/clear", {method: "POST"});
+        loadHistory();
+      } catch (e) {
+        console.error("Failed to clear history:", e);
+      }
+    }
+  });
+  
+  // ================== Export Functions ==================
+  async function exportToPDF(imagePath, chartPath, counts, density, total, sourceType) {
+    try {
+      const res = await fetch("/api/export/pdf", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          image_path: imagePath,
+          chart_path: chartPath,
+          counts: counts,
+          density: density,
+          total: total,
+          source_type: sourceType
+        })
+      });
+      
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `traffic_report_${Date.now()}.pdf`;
+        a.click();
+      }
+    } catch (e) {
+      alert("Export failed: " + e);
+    }
+  }
+  
+  async function exportToExcel(counts, density, total, sourceType) {
+    try {
+      const res = await fetch("/api/export/excel", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          counts: counts,
+          density: density,
+          total: total,
+          source_type: sourceType
+        })
+      });
+      
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `traffic_report_${Date.now()}.xlsx`;
+        a.click();
+      }
+    } catch (e) {
+      alert("Export failed: " + e);
+    }
+  }
+  
+  // ================== Alert System ==================
+  function showAlert() {
+    if (alertBanner) {
+      alertBanner.style.display = 'block';
+      alertBanner.classList.add('pulse');
+      // Play alert sound (you can add a beep.mp3 file)
+      setTimeout(() => {
+        alertBanner.style.display = 'none';
+        alertBanner.classList.remove('pulse');
+      }, 5000);
+    }
+  }
+  
+  // ================== Initialize ==================
+  document.addEventListener('DOMContentLoaded', () => {
+    loadSettings();
+    loadHistory();
+    
+    // Auto-refresh history every 30 seconds
+    setInterval(loadHistory, 30000);
+    
+    // Upload Zone Drag & Drop
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('file');
+    
+    if (uploadZone && fileInput) {
+      uploadZone.addEventListener('click', () => fileInput.click());
+      
+      uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadZone.classList.add('dragover');
+      });
+      
+      uploadZone.addEventListener('dragleave', () => {
+        uploadZone.classList.remove('dragover');
+      });
+      
+      uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) {
+          fileInput.files = e.dataTransfer.files;
+          uploadZone.querySelector('h4').textContent = e.dataTransfer.files[0].name;
+        }
+      });
+      
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length) {
+          uploadZone.querySelector('h4').textContent = e.target.files[0].name;
+        }
+      });
+    }
+    
+    // Duplicate export button handlers
+    document.getElementById('exportPDFBtn2')?.addEventListener('click', () => {
+      document.getElementById('exportPDFBtn')?.click();
+    });
+    
+    document.getElementById('exportExcelBtn2')?.addEventListener('click', () => {
+      document.getElementById('exportExcelBtn')?.click();
+    });
+    
+    // Check GPU status
+    fetch('/api/settings')
+      .then(r => r.json())
+      .then(() => {
+        const gpuStatus = document.getElementById('gpuStatus');
+        if (gpuStatus) {
+          gpuStatus.innerHTML = '<span class="text-success">Available</span>';
+        }
+      })
+      .catch(() => {
+        const gpuStatus = document.getElementById('gpuStatus');
+        if (gpuStatus) gpuStatus.innerHTML = '<span class="text-muted">Unknown</span>';
+      });
+  });
+  
+  // Add export button event listeners for uploaded results
+  window.exportToPDF = exportToPDF;
+  window.exportToExcel = exportToExcel;
+</script>
+</body>
+</html>
