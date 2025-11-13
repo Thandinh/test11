@@ -353,22 +353,16 @@ def phone_camera():
     """Simple page for phone to use as camera"""
     return render_template("phone_camera.html")
 
-# Serve result files with proper MIME types and direct file streaming
+# Serve result files with proper MIME types and HTTP Range support for video streaming
 @app.route("/results/<path:filename>")
 def get_result_file(filename):
-    from flask import Response
+    from flask import Response, request as flask_request
+    import os
+    
     file_path = RESULT_FOLDER / filename
     
     if not file_path.exists():
         return "File not found", 404
-    
-    # Read file in binary mode
-    try:
-        with open(str(file_path), 'rb') as f:
-            file_data = f.read()
-    except Exception as e:
-        print(f"Error reading file: {e}")
-        return "Error reading file", 500
     
     # Determine MIME type
     ext = file_path.suffix.lower()
@@ -383,13 +377,53 @@ def get_result_file(filename):
     else:
         mime_type = 'application/octet-stream'
     
-    # Create response with proper headers
-    response = Response(file_data, mimetype=mime_type)
-    response.headers['Content-Length'] = len(file_data)
-    response.headers['Accept-Ranges'] = 'bytes'
-    response.headers['Cache-Control'] = 'public, max-age=3600'
+    file_size = os.path.getsize(str(file_path))
     
-    return response
+    # Handle Range requests for video streaming (required for browser video players)
+    range_header = flask_request.headers.get('Range', None)
+    
+    if range_header and ext in ['.mp4', '.avi', '.webm', '.mov']:
+        # Parse range header (format: "bytes=start-end")
+        byte_range = range_header.replace('bytes=', '').split('-')
+        start = int(byte_range[0]) if byte_range[0] else 0
+        end = int(byte_range[1]) if len(byte_range) > 1 and byte_range[1] else file_size - 1
+        
+        # Ensure valid range
+        if start >= file_size:
+            return "Requested Range Not Satisfiable", 416
+        
+        length = end - start + 1
+        
+        # Read the requested chunk
+        with open(str(file_path), 'rb') as f:
+            f.seek(start)
+            chunk = f.read(length)
+        
+        # Create partial content response
+        response = Response(chunk, 206, mimetype=mime_type)
+        response.headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Content-Length'] = length
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        
+        return response
+    else:
+        # Serve full file for non-range requests or images
+        try:
+            with open(str(file_path), 'rb') as f:
+                file_data = f.read()
+        except Exception as e:
+            print(f"Error reading file: {e}")
+            return "Error reading file", 500
+        
+        # Create response with proper headers
+        response = Response(file_data, mimetype=mime_type)
+        response.headers['Content-Length'] = len(file_data)
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        response.headers['Access-Control-Allow-Origin'] = '*'  # Allow cross-origin access
+        
+        return response
 
 # Also serve via static route
 @app.route("/static/results/<path:filename>")
