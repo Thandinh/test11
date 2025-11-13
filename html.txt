@@ -280,12 +280,12 @@
           <div class="result-media-large" id="uploadedVideoResult">
             <p class="small text-muted mb-2">Video: {{ result_video }}</p>
             <video id="resultVideoPlayer" class="result-video" controls preload="metadata" style="max-width: 100%; height: auto; background: #000;">
-              <source src="/results/{{ result_video }}" type="{% if result_video.endswith('.mp4') %}video/mp4{% else %}video/x-msvideo{% endif %}">
+              <source src="{{ url_for('static', filename=result_video) }}" type="{% if result_video.endswith('.mp4') %}video/mp4{% else %}video/x-msvideo{% endif %}">
               Your browser does not support the video tag.
             </video>
             <div style="margin-top: 10px; text-align: center;">
-              <a href="/results/{{ result_video }}" target="_blank" class="btn btn-sm btn-outline-primary">Open in New Tab</a>
-              <a href="/results/{{ result_video }}" download class="btn btn-sm btn-outline-success">Download Video</a>
+              <a href="{{ url_for('static', filename=result_video) }}" target="_blank" class="btn btn-sm btn-outline-primary">Open in New Tab</a>
+              <a href="{{ url_for('static', filename=result_video) }}" download class="btn btn-sm btn-outline-success">Download Video</a>
             </div>
           </div>
         {% endif %}
