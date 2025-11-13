@@ -278,10 +278,28 @@
 
         {% if result_video %}
           <div class="result-media-large" id="uploadedVideoResult">
-            <video class="result-video" controls preload="metadata" style="max-width: 100%; height: auto;">
+            <video id="resultVideoPlayer" class="result-video" controls preload="auto" style="max-width: 100%; height: auto;">
+              <source src="{{ url_for('static', filename=result_video) }}" type="video/avi">
               <source src="{{ url_for('static', filename=result_video) }}" type="video/x-msvideo">
-              Your browser does not support the video tag.
+              <source src="{{ url_for('static', filename=result_video) }}">
+              <p>Your browser does not support the video tag. <a href="{{ url_for('static', filename=result_video) }}" download>Download video</a></p>
             </video>
+            <script>
+              // Debug video loading
+              document.addEventListener('DOMContentLoaded', function() {
+                const video = document.getElementById('resultVideoPlayer');
+                if (video) {
+                  video.addEventListener('error', function(e) {
+                    console.error('Video error:', e);
+                    console.error('Video src:', video.src);
+                    console.error('Video error code:', video.error ? video.error.code : 'unknown');
+                  });
+                  video.addEventListener('loadeddata', function() {
+                    console.log('Video loaded successfully');
+                  });
+                }
+              });
+            </script>
           </div>
         {% endif %}
 
