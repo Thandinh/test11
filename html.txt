@@ -279,15 +279,67 @@
         {% if result_video %}
           <div class="result-media-large" id="uploadedVideoResult">
             <p class="small text-muted mb-2">Video: {{ result_video }}</p>
-            <video id="resultVideoPlayer" class="result-video" controls preload="metadata" style="max-width: 100%; height: auto; background: #000;">
-              <source src="{{ url_for('static', filename=result_video) }}" type="{% if result_video.endswith('.mp4') %}video/mp4{% else %}video/x-msvideo{% endif %}">
-              Your browser does not support the video tag.
+            <video id="resultVideoPlayer" class="result-video" controls preload="auto" playsinline webkit-playsinline 
+                   style="max-width: 100%; height: auto; background: #000; display: block;">
+              <source src="{{ url_for('static', filename=result_video) }}" type="{% if result_video.endswith('.mp4') %}video/mp4{% elif result_video.endswith('.avi') %}video/x-msvideo{% else %}video/mp4{% endif %}">
+              <p style="color: white; padding: 20px;">Your browser does not support the video tag. Please <a href="{{ url_for('static', filename=result_video) }}" download>download the video</a>.</p>
             </video>
             <div style="margin-top: 10px; text-align: center;">
-              <a href="{{ url_for('static', filename=result_video) }}" target="_blank" class="btn btn-sm btn-outline-primary">Open in New Tab</a>
-              <a href="{{ url_for('static', filename=result_video) }}" download class="btn btn-sm btn-outline-success">Download Video</a>
+              <button onclick="document.getElementById('resultVideoPlayer').play()" class="btn btn-sm btn-outline-success">
+                <i class="fas fa-play"></i> Play
+              </button>
+              <button onclick="document.getElementById('resultVideoPlayer').pause()" class="btn btn-sm btn-outline-warning">
+                <i class="fas fa-pause"></i> Pause
+              </button>
+              <a href="{{ url_for('static', filename=result_video) }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                <i class="fas fa-external-link-alt"></i> Open in New Tab
+              </a>
+              <a href="{{ url_for('static', filename=result_video) }}" download class="btn btn-sm btn-outline-info">
+                <i class="fas fa-download"></i> Download
+              </a>
             </div>
+            <div id="videoDebugInfo" class="mt-2 small text-muted" style="display:none;">
+              <strong>Debug Info:</strong><br>
+              Path: <code>{{ result_video }}</code><br>
+              Type: <code>{% if result_video.endswith('.mp4') %}video/mp4{% elif result_video.endswith('.avi') %}video/x-msvideo{% else %}unknown{% endif %}</code><br>
+              URL: <code>{{ url_for('static', filename=result_video) }}</code>
+            </div>
+            <button onclick="document.getElementById('videoDebugInfo').style.display='block'" class="btn btn-sm btn-outline-secondary mt-2">
+              Show Debug Info
+            </button>
           </div>
+          <script>
+            // Video player error handling and debugging
+            (function() {
+              const video = document.getElementById('resultVideoPlayer');
+              if (video) {
+                video.addEventListener('error', function(e) {
+                  console.error('Video error:', e);
+                  console.error('Video error code:', video.error ? video.error.code : 'unknown');
+                  console.error('Video error message:', video.error ? video.error.message : 'unknown');
+                  alert('Video loading error. Error code: ' + (video.error ? video.error.code : 'unknown') + 
+                        '. Please try downloading the video or opening in a new tab.');
+                });
+                
+                video.addEventListener('loadedmetadata', function() {
+                  console.log('Video metadata loaded successfully');
+                  console.log('Duration:', video.duration, 'seconds');
+                  console.log('Video size:', video.videoWidth, 'x', video.videoHeight);
+                });
+                
+                video.addEventListener('loadeddata', function() {
+                  console.log('Video data loaded, ready to play');
+                });
+                
+                video.addEventListener('canplay', function() {
+                  console.log('Video can start playing');
+                });
+                
+                // Auto-load video
+                video.load();
+              }
+            })();
+          </script>
         {% endif %}
 
         <div id="cameraResultContainer" style="display:none;"></div>
