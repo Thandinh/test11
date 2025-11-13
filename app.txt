@@ -1,4 +1,4 @@
-# app.py 
+# app.py
 import os
 import time
 import shutil
@@ -166,17 +166,11 @@ def process_video(filepath: str):
     w = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Try MP4 with mp4v codec first (best browser compatibility)
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
-    writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w, h))
+    # Create temporary video with MJPG (always works on Ubuntu)
+    temp_video_path = out_dir / (Path(filepath).stem + "_temp.avi")
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    writer = cv2.VideoWriter(str(temp_video_path), fourcc, fps, (w, h))
     
-    if not writer.isOpened():
-        # Fallback to AVI with XVID
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        out_video_path = out_dir / (Path(filepath).stem + "_annotated.avi")
-        writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (w, h))
-        
     if not writer.isOpened():
         raise RuntimeError("Cannot create video writer")
 
@@ -230,6 +224,32 @@ def process_video(filepath: str):
 
     writer.release()
     in_cap.release()
+    
+    # Convert to H.264 MP4 using FFmpeg (browser compatible)
+    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
+    try:
+        import subprocess
+        # Try to convert with FFmpeg
+        result = subprocess.run([
+            'ffmpeg', '-y', '-i', str(temp_video_path),
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-pix_fmt', 'yuv420p', str(out_video_path)
+        ], capture_output=True, timeout=300)
+        
+        if result.returncode == 0 and out_video_path.exists():
+            # Success! Remove temp file
+            temp_video_path.unlink()
+            print(f"Video converted to H.264 successfully")
+        else:
+            # FFmpeg failed, use temp video as final
+            print(f"FFmpeg conversion failed, using MJPG format")
+            temp_video_path.rename(out_video_path.with_suffix('.avi'))
+            out_video_path = out_video_path.with_suffix('.avi')
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        # FFmpeg not available, rename temp to final
+        print(f"FFmpeg not available: {e}, using MJPG AVI format")
+        temp_video_path.rename(out_video_path.with_suffix('.avi'))
+        out_video_path = out_video_path.with_suffix('.avi')
     
     # Set file permissions for Ubuntu (readable by all)
     try:
