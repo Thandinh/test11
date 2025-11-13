@@ -166,13 +166,40 @@ def process_video(filepath: str):
     w = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Create temporary video with MJPG (always works on Ubuntu)
-    temp_video_path = out_dir / (Path(filepath).stem + "_temp.avi")
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    writer = cv2.VideoWriter(str(temp_video_path), fourcc, fps, (w, h))
+    # Try different codecs in order of browser compatibility
+    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
+    writer = None
+    codec_used = None
     
-    if not writer.isOpened():
-        raise RuntimeError("Cannot create video writer")
+    # List of codecs to try (in order of preference)
+    codecs_to_try = [
+        ('mp4v', 'mp4v', '.mp4'),  # MPEG-4 Part 2 - widely supported
+        ('avc1', 'avc1', '.mp4'),  # H.264 - best quality
+        ('H264', 'H264', '.mp4'),  # H.264 alternative
+        ('XVID', 'XVID', '.avi'),  # Xvid codec fallback
+        ('MJPG', 'MJPG', '.avi'),  # Motion JPEG - always works
+    ]
+    
+    for codec_name, fourcc_str, ext in codecs_to_try:
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+            test_path = out_dir / (Path(filepath).stem + f"_annotated{ext}")
+            test_writer = cv2.VideoWriter(str(test_path), fourcc, fps, (w, h))
+            
+            if test_writer.isOpened():
+                writer = test_writer
+                out_video_path = test_path
+                codec_used = codec_name
+                print(f"✓ Using codec: {codec_name} (extension: {ext})")
+                break
+            else:
+                test_writer.release()
+        except Exception as e:
+            print(f"✗ Codec {codec_name} failed: {e}")
+            continue
+    
+    if writer is None or not writer.isOpened():
+        raise RuntimeError("Cannot create video writer - no compatible codec found")
 
     # Đếm xe đúng cách: lấy số xe tối đa trong 1 frame thay vì cộng dồn
     max_counts = {}
@@ -225,37 +252,13 @@ def process_video(filepath: str):
     writer.release()
     in_cap.release()
     
-    # Convert to H.264 MP4 using FFmpeg (browser compatible)
-    out_video_path = out_dir / (Path(filepath).stem + "_annotated.mp4")
-    try:
-        import subprocess
-        # Try to convert with FFmpeg
-        result = subprocess.run([
-            'ffmpeg', '-y', '-i', str(temp_video_path),
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-            '-pix_fmt', 'yuv420p', str(out_video_path)
-        ], capture_output=True, timeout=300)
-        
-        if result.returncode == 0 and out_video_path.exists():
-            # Success! Remove temp file
-            temp_video_path.unlink()
-            print(f"Video converted to H.264 successfully")
-        else:
-            # FFmpeg failed, use temp video as final
-            print(f"FFmpeg conversion failed, using MJPG format")
-            temp_video_path.rename(out_video_path.with_suffix('.avi'))
-            out_video_path = out_video_path.with_suffix('.avi')
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-        # FFmpeg not available, rename temp to final
-        print(f"FFmpeg not available: {e}, using MJPG AVI format")
-        temp_video_path.rename(out_video_path.with_suffix('.avi'))
-        out_video_path = out_video_path.with_suffix('.avi')
-    
     # Set file permissions for Ubuntu (readable by all)
     try:
         os.chmod(str(out_video_path), 0o644)
     except Exception as e:
         print(f"Warning: Could not set file permissions: {e}")
+    
+    print(f"✓ Video created successfully using {codec_used} codec: {out_video_path.name}")
 
     # Sử dụng số xe tối đa thay vì tổng cộng dồn
     counts = max_counts
@@ -787,4 +790,3 @@ def export_excel():
 # ---------------- run ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, threaded=True)
- 
